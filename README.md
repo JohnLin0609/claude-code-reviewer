@@ -101,10 +101,6 @@ curl -o ~/.claude/commands/code-review.md \
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
 - Git (optional but recommended — the command offers to set it up if missing)
 
-## Inspired By
-
-[How I Use Claude Code](https://boristane.com/blog/how-i-use-claude-code/) by Boris Tane — the principle of **never letting Claude change anything until a written plan has been reviewed and approved**.
-
 ## License
 
 [MIT](LICENSE)
