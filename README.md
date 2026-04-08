@@ -73,6 +73,8 @@ No restart required. Claude Code picks up the command immediately.
 
 ## Usage
 
+This is a slash command for the **Claude Code CLI**. Run it inside the Claude Code terminal session:
+
 ```
 /code-review
 ```
