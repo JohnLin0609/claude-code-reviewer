@@ -1,6 +1,6 @@
 # /code-review — Claude Code Slash Command
 
-A slash command for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that acts as a senior engineer reviewing your project. It reads deeply, checks 13 categories (~100 checklist items), writes a prioritised improvement plan, and waits for your approval before touching a single file.
+A slash command for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that acts as a senior engineer reviewing your project. It builds a global model of how your code flows, hunts for **cross-function bugs** that only appear when functions interact, then sweeps for local issues — and waits for your approval before touching a single file.
 
 ## Quick Start
 
@@ -26,22 +26,43 @@ No restart required. Claude Code picks up the command immediately.
 
 ## How It Works
 
-| Phase | What happens |
-|-------|-------------|
-| **0 — Git Safety** | Detects git. If missing, asks to initialise. If present, commits a pre-review snapshot. |
-| **1 — Read Deeply** | Traces entry points, data flow, shared state, async boundaries, and external calls. |
-| **2 — Systematic Review** | Checks 13 categories. No category is skipped. |
-| **3 — Write Plan** | Produces `code_improve_plan.md` with every finding prioritised into 🔴 / 🟡 / 🟢 tiers. |
-| **4 — Hand Back** | Prints a summary and **stops**. Waits for your instruction before making any change. |
-| **5 — Apply Fixes** | Applies only the issues you approved, marks them done, leaves changes **uncommitted** for your review. |
+The review runs in two stages, each enforced by writing artefacts to disk before moving on.
 
-## Review Categories
+**Stage 1 — Workflow analysis** (the bugs that hide between functions):
 
-| Tier | Categories |
-|------|-----------|
-| 🔴 Critical | Correctness & Logic, Null / Type Safety, Concurrency & Race Conditions, Error Handling, Resource Management |
-| 🟡 High | Performance & Efficiency, Security, Code Structure & Design, Dependency & Environment |
-| 🟢 Medium | Naming & Readability, Testing & Coverage, Logging & Observability, API & Interface Design |
+| Phase | Output | What happens |
+|-------|--------|-------------|
+| **0 — Git Safety** | (commit) | Detects git, asks to initialise if missing, snapshots current state. |
+| **1 — Inventory** | `01_inventory.md` | Maps entry points, modules, external boundaries, concurrency model. |
+| **2 — Workflow Traces** | `02_traces.md` | Walks 2–3 user-visible paths end-to-end, recording entry/exit state at every step. |
+| **3 — Contracts** | `03_contracts.md` | Extracts the implicit pre/post-conditions of each function in the traces. |
+| **4 — Shared State** | `04_state.md` | Lists every shared mutable state with its writers, readers, and ordering guarantees. |
+| **5 — Cross-Function Review** | `05_findings.md` | Hunts seven failure patterns + an adversarial pass against every step. |
+
+**Stage 2 — Local sweep** (the bugs that fit inside one function):
+
+| Phase | Output | What happens |
+|-------|--------|-------------|
+| **6 — Local Checklist** | (appends to `05_findings.md`) | Sweeps 8 categories: correctness, types, errors, resources, performance, security, structure, readability. |
+| **7 — Write Plan** | `code_improve_plan.md` | Consolidates everything into a prioritised plan with 🔗 / 🔴 / 🟡 / 🟢 tiers. |
+| **8 — Hand Back** | (summary) | Prints findings count and **stops**. Waits for your instruction. |
+| **9 — Apply Fixes** | (commit) | Applies only the issues you approved. Snapshots before, commits after. |
+
+All intermediate artefacts live in `_review_workspace/` so you can audit the reasoning behind every finding.
+
+## Cross-Function Patterns Checked
+
+Stage 1 hunts these specifically — they're the bugs a file-by-file reader misses:
+
+- **A** Caller and callee disagree on a precondition
+- **B** Step ordering / state-machine violation (paid order, no inventory)
+- **C** Read-modify-write without atomicity
+- **D** Error-handling discontinuity across an async boundary
+- **E** Resource lifecycle leaks across a path
+- **F** Two implementations of the same intent that have drifted apart
+- **G** Implicit coupling via shared state
+
+Plus an **adversarial pass** — for each step in each traced path, what happens if it's called twice, in parallel, with boundary input, partially fails, or runs out of order?
 
 ## Usage
 
@@ -55,19 +76,26 @@ Run inside a **Claude Code CLI** session:
 After the review completes, tell Claude what to fix:
 
 ```
-"Fix all critical issues"
-"Fix issues 1, 3, and 5"
+"Fix all cross-function and critical issues"
+"Fix issues C-1, 3, and L-5"
 "Fix everything"
 "Skip the medium issues and fix the rest"
 ```
 
+Findings are numbered `C-<n>` (cross-function) and `L-<n>` (local) so you can target them precisely.
+
 ## Output
 
-A `code_improve_plan.md` file is written to the project root:
+The plan written to `code_improve_plan.md`:
 
 ```markdown
+## 🔗 Cross-function / workflow issues
+- [ ] **[Pattern B]** `Path A` (checkout.js:42 ↔ inventory.js:88) —
+      order marked paid before inventory decremented; on decrement failure,
+      paid order with no hold → wrap both in a transaction
+
 ## 🔴 Critical — Fix Immediately
-- [ ] **Error Handling** `auth.js:42` — exceptions swallowed silently → add logging and re-throw
+- [ ] **Error Handling** `auth.js:42` — exceptions swallowed silently → log and re-throw
 - [ ] **Security** `db.js:17` — raw SQL string interpolation → use parameterized queries
 
 ## 🟡 High — Fix This Sprint
@@ -78,10 +106,16 @@ Items are marked `- [x]` as fixes are applied, so the file doubles as a progress
 
 ## Git Safety Net
 
-Every run creates a snapshot commit so fixes can be individually reverted:
+Three commits per full cycle make every step individually revertible:
+
+```
+fix: apply approved changes from code-review   ← after fixes
+chore: pre-fix snapshot                        ← right before fixes touch source
+chore: pre-code-review snapshot                ← right before review begins
+```
 
 ```bash
-git diff HEAD~1             # see what the review changed
+git diff HEAD~1             # see what the last step changed
 git restore .               # discard uncommitted changes
 git revert HEAD             # undo last commit safely
 ```
